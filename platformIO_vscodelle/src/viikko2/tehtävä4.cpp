@@ -16,4 +16,6 @@ void loop() {
   Serial.println((PORTB & (1 << 5)) ? 1 : 0);
 
   delay(1000);
+
+  Serial.println("pieni muutos pushia varten");
 }

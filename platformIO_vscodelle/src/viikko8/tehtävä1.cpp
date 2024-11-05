@@ -1,16 +1,17 @@
-#include <Arduino.h>
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+// #include <Arduino.h>
+// #include <Wire.h>
+// #include <DFRobot_RGBLCD1602.h>
 
+// // Luo DFRobot_RGBLCD1602-objekti
+// DFRobot_RGBLCD1602 lcd(0x27, 16, 2);
 
-LiquidCrystal_I2C lcd(0x27, 16, 2);
+// void setup() {
+//     lcd.init();  // Alustaa 16x2-näytön
+//     lcd.setRGB(255, 0, 0); // Aseta taustavalo punaiseksi
+//     lcd.clear();       // Tyhjentää näytön
+//     lcd.print("Hello, World!"); // Näyttää tekstin
+// }
 
-void setup() {
-    lcd.init();
-    lcd.backlight();
-    lcd.print("Hello, PlatformIO!");
-}
-
-void loop() {
-    // Päivitä näyttöä tai lisää omaa logiikkaa
-}
+// void loop() {
+//     // Tyhjää tai omaa koodia
+// }

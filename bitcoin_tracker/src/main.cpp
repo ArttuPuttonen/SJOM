@@ -4,8 +4,8 @@
 #include <Wire.h>
 #include <DFRobot_RGBLCD1602.h>
 
-const char* ssid = "wifi nimi";       
-const char* password = "salis";
+const char* ssid = "SOURCE";       
+const char* password = "Pelle!23";
 
 // Define LCD with RGB address, columns, and rows
 DFRobot_RGBLCD1602 lcd(0x60, 16, 2);  // Adjust the address if necessary

@@ -9,43 +9,49 @@ const char* ssid = "DNA-WIFI-0266";
 const char* password = "14964055";
 
 // Define LCD with RGB address, columns, and rows
-DFRobot_RGBLCD1602 lcd(0x60, 16, 2);  // Adjust the address if necessary
+DFRobot_RGBLCD1602 lcd(0x60, 16, 2);
 
 WiFiClientSecure wifiClient;
+
 float lastBTCPrice = 0.0;  // Store last BTC price
 float lastDOGEPrice = 0.0; // Store last DOGE price
 bool isBitcoin = true;     // Track which coin is displayed (true = Bitcoin, false = Dogecoin)
+unsigned int timeInterval = 0;  // 0 = 15m, 1 = 1h, 2 = 24h
 
-// Button pin configuration
+// Button configuration
 #define BUTTON_PIN 0  // GPIO0 (D3 pin on ESP8266)
-unsigned long lastButtonPress = 0;
-const unsigned long debounceDelay = 50;  // Debounce delay for button press
-
 #define READ_GPIO(pin) ((GPI & (1 << pin)) == 0)  // Macro to read GPIO state
+unsigned long lastButtonPress = 0;
+bool buttonState = false;
 
 // Update intervals
 unsigned long lastPriceUpdate = 0;
-const unsigned long priceUpdateInterval = 60000;  // 1 minute interval for price updates
+const unsigned long priceUpdateInterval = 60000;  // Update prices every 1 minute
 
-// Messages for the second row, with a placeholder for percentage change
-String messages[] = {"UPD every min", "Green: price up", "Red: price down", "Change: +0.00%"};
-unsigned int messageIndex = 0;  // Index for cycling through messages
+// Messages for the second row
+String messages[] = {"UPD every min", "Change: +0.00%"};
+unsigned int messageIndex = 0;
 unsigned long lastMessageSwitch = 0;
-const unsigned long messageDisplayInterval = 2500;  // 2.5 seconds interval for message rotation
+const unsigned long messageDisplayInterval = 2500;  // Rotate messages every 2.5 seconds
+
+// Constants for button press durations
+const unsigned long debounceDelay = 50;    // Debounce delay
+const unsigned long longPressDuration = 700; // Long press threshold
 
 void setup() {
-    Serial.begin(115200);  // Initialize serial communication
-    EEPROM.begin(512);     // Initialize EEPROM with 512 bytes
+    Serial.begin(115200);
+    EEPROM.begin(512);  // Initialize EEPROM with 512 bytes
 
     // Enable watchdog with an 8-second timeout
     ESP.wdtEnable(WDTO_8S);
 
-    // Load last used coin from EEPROM
+    // Load last selected coin and interval from EEPROM
     EEPROM.get(0, isBitcoin);
+    EEPROM.get(1, timeInterval);
 
     // Initialize LCD
     lcd.init();
-    lcd.setRGB(255, 255, 255);  // Initial color
+    lcd.setRGB(255, 255, 255);  // White backlight
     lcd.setCursor(0, 0);
     lcd.print("Connecting...");
 
@@ -54,24 +60,19 @@ void setup() {
 
     // Connect to WiFi
     WiFi.begin(ssid, password);
-    Serial.print("Connecting to WiFi");
-    unsigned long wifiTimeout = millis() + 30000;  // 30-second timeout
     while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
+        lcd.setCursor(0, 0);
+        lcd.print("WiFi Connecting");
         Serial.print(".");
-        ESP.wdtFeed();  // Reset the watchdog during long operations
-        if (millis() > wifiTimeout) {
-            Serial.println("\nWiFi connection failed. Restarting...");
-            ESP.restart();  // Restart the device
-        }
+        ESP.wdtFeed();  // Reset watchdog during long operations
     }
-    Serial.println("");
-    Serial.println("Connected to WiFi");
+
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("WiFi Connected");
 
-    wifiClient.setInsecure();
+    wifiClient.setInsecure();  // For HTTPS requests
     delay(2000);  // Short delay to show the initial message
 }
 
@@ -80,22 +81,42 @@ void loop() {
 
     unsigned long currentMillis = millis();
 
-    // Handle button press to toggle between Bitcoin and Dogecoin
+    // Handle button press logic
     if (READ_GPIO(BUTTON_PIN)) {  // Button is pressed
-        if (currentMillis - lastButtonPress >= debounceDelay) {
-            isBitcoin = !isBitcoin;  // Toggle the coin
-            lcd.clear();
-            lcd.setCursor(0, 0);
-            lcd.print(isBitcoin ? "BTC selected" : "DOGE selected");
+        if (!buttonState && (currentMillis - lastButtonPress > debounceDelay)) {
+            lastButtonPress = currentMillis;
+            buttonState = true;
+        }
+    } else {  // Button is released
+        if (buttonState) {
+            unsigned long pressDuration = currentMillis - lastButtonPress;
 
-            // Save the selected coin to EEPROM
-            EEPROM.put(0, isBitcoin);
-            EEPROM.commit();
+            if (pressDuration < longPressDuration) {
+                // Short press: Toggle between Bitcoin and Dogecoin
+                isBitcoin = !isBitcoin;
+                lcd.clear();
+                lcd.setCursor(0, 0);
+                lcd.print(isBitcoin ? "BTC selected" : "DOGE selected");
 
-            delay(500);  // Short delay to show feedback
+                // Save the selected coin to EEPROM
+                EEPROM.put(0, isBitcoin);
+                EEPROM.commit();
+            } else {
+                // Long press: Change time interval (15m ↔ 1h ↔ 24h)
+                timeInterval = (timeInterval + 1) % 3;
+                lcd.clear();
+                lcd.setCursor(0, 0);
+                lcd.print("Interval: ");
+                lcd.print(timeInterval == 0 ? "15m" : (timeInterval == 1 ? "1h" : "24h"));
+
+                // Save the selected interval to EEPROM
+                EEPROM.put(1, timeInterval);
+                EEPROM.commit();
+            }
+
+            buttonState = false;
             lastPriceUpdate = 0;  // Force immediate price update after button press
         }
-        lastButtonPress = currentMillis;
     }
 
     // Update the coin price every 1 minute or immediately after button press
@@ -105,13 +126,16 @@ void loop() {
         if (WiFi.status() == WL_CONNECTED) {
             HTTPClient http;
             String url;
+            String interval;
+
+            // Set interval for historical data
+            if (timeInterval == 0) interval = "15m";
+            else if (timeInterval == 1) interval = "1h";
+            else interval = "1d";  // Binance uses 1d for daily interval
 
             // Select API endpoint based on the selected coin
-            if (isBitcoin) {
-                url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT";
-            } else {
-                url = "https://api.binance.com/api/v3/ticker/price?symbol=DOGEUSDT";
-            }
+            String symbol = isBitcoin ? "BTCUSDT" : "DOGEUSDT";
+            url = "https://api.binance.com/api/v3/klines?symbol=" + symbol + "&interval=" + interval + "&limit=1";
 
             http.begin(wifiClient, url);
             int httpResponseCode = http.GET();
@@ -120,19 +144,19 @@ void loop() {
                 String payload = http.getString();
 
                 // Parse JSON response
-                StaticJsonDocument<512> doc;
+                StaticJsonDocument<1024> doc;
                 DeserializationError error = deserializeJson(doc, payload);
                 if (!error) {
-                    float currentPrice = doc["price"].as<float>();
+                    float currentPrice = doc[0][4].as<float>();  // Closing price
+                    float openPrice = doc[0][1].as<float>();     // Opening price
 
                     Serial.println((isBitcoin ? "Bitcoin" : "Dogecoin") + String(" price: $") +
                                    String(currentPrice, isBitcoin ? 2 : 5));
 
                     // Calculate percentage change
-                    float lastSavedPrice = isBitcoin ? lastBTCPrice : lastDOGEPrice;
                     float percentageChange = 0.0;
-                    if (lastSavedPrice != 0.0) {
-                        percentageChange = ((currentPrice - lastSavedPrice) / lastSavedPrice) * 100.0;
+                    if (openPrice != 0.0) {
+                        percentageChange = ((currentPrice - openPrice) / openPrice) * 100.0;
                     }
 
                     // Update the last message in the messages array with the percentage change
@@ -141,10 +165,10 @@ void loop() {
                         changeMessage += "+";
                     }
                     changeMessage += String(percentageChange, 2) + "%";
-                    messages[3] = changeMessage;  // Update the last message
+                    messages[1] = changeMessage;  // Update the "Change" message
 
                     // Set backlight color based on price change
-                    lcd.setRGB(currentPrice > lastSavedPrice ? 0 : 255, currentPrice > lastSavedPrice ? 255 : 0, 0);  // Green/Red
+                    lcd.setRGB(currentPrice > openPrice ? 0 : 255, currentPrice > openPrice ? 255 : 0, 0);  // Green/Red
 
                     // Display the price on the LCD
                     lcd.setCursor(0, 0);
@@ -152,13 +176,6 @@ void loop() {
                     lcd.setCursor(0, 0);
                     lcd.print(isBitcoin ? "BTC: $" : "DOGE: $");
                     lcd.print(currentPrice, isBitcoin ? 2 : 5);  // 2 decimals for Bitcoin, 5 for Dogecoin
-
-                    // Update the last saved price
-                    if (isBitcoin) {
-                        lastBTCPrice = currentPrice;
-                    } else {
-                        lastDOGEPrice = currentPrice;
-                    }
                 } else {
                     Serial.println("Failed to parse JSON");
                     lcd.setCursor(0, 0);
@@ -190,4 +207,3 @@ void loop() {
         }
     }
 }
- 

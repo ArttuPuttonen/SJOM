@@ -5,8 +5,8 @@
 #include <DFRobot_RGBLCD1602.h>
 #include <EEPROM.h>
 
-const char* ssid = "DNA-WIFI-0266";
-const char* password = "14964055";
+const char* ssid = "wifi name here";
+const char* password = "password here";
 
 // Define LCD with RGB address, columns, and rows
 DFRobot_RGBLCD1602 lcd(0x60, 16, 2);

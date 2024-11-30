@@ -32,6 +32,9 @@ const unsigned long messageDisplayInterval = 2500;  // 2.5 seconds interval for 
 void setup() {
     Serial.begin(115200);  // Initialize serial communication
 
+    // Enable watchdog with an 8-second timeout
+    ESP.wdtEnable(WDTO_8S);
+
     // Initialize LCD
     lcd.init();
     lcd.setRGB(255, 255, 255);  // Initial color
@@ -44,13 +47,14 @@ void setup() {
     // Connect to WiFi
     WiFi.begin(ssid, password);
     Serial.print("Connecting to WiFi");
-    unsigned long wifiTimeout = millis() + 30000;  // 30 sekunnin aikakatkaisu
+    unsigned long wifiTimeout = millis() + 30000;  // 30-second timeout
     while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
         Serial.print(".");
+        ESP.wdtFeed();  // Reset the watchdog during long operations
         if (millis() > wifiTimeout) {
             Serial.println("\nWiFi connection failed. Restarting...");
-            ESP.restart();  // Uudelleenkäynnistetään laite
+            ESP.restart();  // Restart the device
         }
     }
     Serial.println("");
@@ -64,6 +68,8 @@ void setup() {
 }
 
 void loop() {
+    ESP.wdtFeed();  // Reset the watchdog timer to prevent restart
+
     unsigned long currentMillis = millis();
 
     // Handle button press to toggle between Bitcoin and Dogecoin

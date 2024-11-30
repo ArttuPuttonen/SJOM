@@ -4,149 +4,170 @@
 #include <Wire.h>
 #include <DFRobot_RGBLCD1602.h>
 
-const char* ssid = "SOURCE";       
-const char* password = "Pelle!23";
+const char* ssid = "DNA-WIFI-0266";
+const char* password = "14964055";
 
 // Define LCD with RGB address, columns, and rows
 DFRobot_RGBLCD1602 lcd(0x60, 16, 2);  // Adjust the address if necessary
 
 WiFiClientSecure wifiClient;
-float lastBitcoinPrice = 0.0;  // Variable to store the last Bitcoin price
+float lastPrice = 0.0;  // Variable to store the last fetched price
+bool isBitcoin = true;  // Track which coin is displayed (true = Bitcoin, false = Dogecoin)
+
+// Button pin configuration
+const int buttonPin = 0;  // D3 pin on ESP8266
+unsigned long lastButtonPress = 0;
+const unsigned long debounceDelay = 50;  // Debounce delay for button press
+
+// Update intervals
+unsigned long lastPriceUpdate = 0;
+const unsigned long priceUpdateInterval = 60000;  // 1 minute interval for price updates
 
 // Messages for the second row, with a placeholder for percentage change
-String messages[] = {"UPD every min", "Green: price up", "Red: price down", ""};
+String messages[] = {"UPD every min", "Green: price up", "Red: price down", "Change: +0.000%"};
 unsigned int messageIndex = 0;  // Index for cycling through messages
-
-unsigned long lastPriceUpdate = 0;
 unsigned long lastMessageSwitch = 0;
-const unsigned long priceUpdateInterval = 60000;         // 1 minute interval for price update
-const unsigned long messageDisplayInterval = 2500; 
+const unsigned long messageDisplayInterval = 2500;  // 2.5 seconds interval for message rotation
 
 void setup() {
-  Serial.begin(115200);  // Initialize serial communication
+    Serial.begin(115200);  // Initialize serial communication
 
-  // Initialize the LCD and set an initial RGB backlight color
-  lcd.init();
-  lcd.setRGB(255, 255, 255);  // Set initial color to blue
-  lcd.setCursor(0, 0);
-  lcd.print("Connecting...");
+    // Initialize LCD
+    lcd.init();
+    lcd.setRGB(255, 255, 255);  // Initial color
+    lcd.setCursor(0, 0);
+    lcd.print("Connecting...");
 
-  // Connect to WiFi
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi");
+    // Configure button pin with internal pull-up resistor
+    pinMode(buttonPin, INPUT_PULLUP);
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
-  }
-  
-  Serial.println("");
-  Serial.println("Connected to WiFi");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+    // Connect to WiFi
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting to WiFi");
+    unsigned long wifiTimeout = millis() + 30000;  // 30 sekunnin aikakatkaisu
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.print(".");
+        if (millis() > wifiTimeout) {
+            Serial.println("\nWiFi connection failed. Restarting...");
+            ESP.restart();  // Uudelleenkäynnistetään laite
+        }
+    }
+    Serial.println("");
+    Serial.println("Connected to WiFi");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Connected");
 
-  wifiClient.setInsecure();
-
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("WiFi Connected");
-
-  // Display a "Fetching Price..." message immediately after WiFi connects
-  lcd.setCursor(0, 1);
-  lcd.print("Fetching Price...");
-  delay(2000);  // Short delay to show the message before the first update
+    wifiClient.setInsecure();
+    delay(2000);  // Short delay to show the initial message
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
+    unsigned long currentMillis = millis();
 
-  // Update the Bitcoin price every 1 minute
-  if (currentMillis - lastPriceUpdate >= priceUpdateInterval || lastPriceUpdate == 0) {
-    lastPriceUpdate = currentMillis;
-
-    if (WiFi.status() == WL_CONNECTED) {  
-      HTTPClient http;    
-
-      // API URL
-      String url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd";
-      http.begin(wifiClient, url);
-      
-      int httpResponseCode = http.GET();
-
-      if (httpResponseCode > 0) {
-        String payload = http.getString();  
-
-        Serial.println("HTTP Response code: " + String(httpResponseCode));
-        Serial.println("Payload: " + payload);
-
-        // Parse JSON response
-        StaticJsonDocument<200> doc;
-        DeserializationError error = deserializeJson(doc, payload);
-        if (!error) {
-          float bitcoinPrice = doc["bitcoin"]["usd"];
-          Serial.println("Bitcoin price (USD): " + String(bitcoinPrice));
-
-          // Calculate percentage change
-          float percentageChange = 0.0;
-          if (lastBitcoinPrice != 0) {
-            percentageChange = ((bitcoinPrice - lastBitcoinPrice) / lastBitcoinPrice) * 100;
-          }
-
-          // Update the "Change" message with the new percentage change
-          String changeMessage = "Change: ";
-          if (percentageChange >= 0) {
-            changeMessage += "+";
-          }
-          changeMessage += String(percentageChange, 2) + "%";
-          messages[3] = changeMessage;  // Update the last message in the array
-
-          // Set backlight color based on price change
-          if (bitcoinPrice > lastBitcoinPrice) {
-            lcd.setRGB(0, 255, 0);  // Set backlight to green
-          } else if (bitcoinPrice < lastBitcoinPrice) {
-            lcd.setRGB(255, 0, 0);  // Set backlight to red
-          }
-
-          // Display only the Bitcoin price on the first row
-          lcd.setCursor(0, 0);
-          lcd.print("                ");  // Clear the first row
-          lcd.setCursor(0, 0);
-          lcd.print("BTC: $");
-          lcd.print(int(bitcoinPrice));  // Display price as integer (no cents)
-
-          // Store the current price for the next comparison
-          lastBitcoinPrice = bitcoinPrice;
-        } else {
-          Serial.println("Failed to parse JSON");
-          lcd.setCursor(0, 0);
-          lcd.print("JSON Parse Error ");
+    // Handle button press to toggle between Bitcoin and Dogecoin
+    if (digitalRead(buttonPin) == LOW) {  // Button is pressed
+        if (currentMillis - lastButtonPress >= debounceDelay) {
+            isBitcoin = !isBitcoin;  // Toggle the coin
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print(isBitcoin ? "BTC selected" : "DOGE selected");
+            lastPrice = 0.0;  // Reset last price to prevent incorrect change calculation
+            delay(500);  // Short delay to show feedback
+            lastPriceUpdate = 0;  // Force immediate price update after button press
         }
-      } else {
-        Serial.println("Error on HTTP request: " + String(httpResponseCode));
-        lcd.setCursor(0, 0);
-        lcd.print("HTTP Error: ");
+        lastButtonPress = currentMillis;
+    }
+
+    // Update the coin price every 1 minute or immediately after button press
+    if (currentMillis - lastPriceUpdate >= priceUpdateInterval || lastPriceUpdate == 0) {
+        lastPriceUpdate = currentMillis;
+
+        if (WiFi.status() == WL_CONNECTED) {
+            HTTPClient http;
+            String url;
+
+            // Select API endpoint based on the selected coin
+            if (isBitcoin) {
+                url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT";
+            } else {
+                url = "https://api.binance.com/api/v3/ticker/price?symbol=DOGEUSDT";
+            }
+
+            http.begin(wifiClient, url);
+            int httpResponseCode = http.GET();
+
+            if (httpResponseCode > 0) {
+                String payload = http.getString();
+
+                // Debugging: Print the full JSON payload
+                Serial.println("Full JSON payload:");
+                Serial.println(payload);
+
+                // Parse JSON response
+                StaticJsonDocument<512> doc;
+                DeserializationError error = deserializeJson(doc, payload);
+                if (!error) {
+                    float currentPrice = doc["price"].as<float>();
+
+                    Serial.println((isBitcoin ? "Bitcoin" : "Dogecoin") + String(" price: $") +
+                                   String(currentPrice, isBitcoin ? 2 : 5));
+
+                    // Calculate percentage change
+                    float percentageChange = 0.0;
+                    if (lastPrice != 0.0) {
+                        percentageChange = ((currentPrice - lastPrice) / lastPrice) * 100.0;
+                    }
+
+                    // Update the last message in the messages array with the percentage change
+                    String changeMessage = "Change: ";
+                    if (percentageChange >= 0) {
+                        changeMessage += "+";
+                    }
+                    changeMessage += String(percentageChange, 2) + "%";
+                    messages[3] = changeMessage;  // Update the last message
+
+                    // Set backlight color based on price change
+                    lcd.setRGB(currentPrice > lastPrice ? 0 : 255, currentPrice > lastPrice ? 255 : 0, 0);  // Green/Red
+
+                    // Display the price on the LCD
+                    lcd.setCursor(0, 0);
+                    lcd.print("                ");  // Clear the first row
+                    lcd.setCursor(0, 0);
+                    lcd.print(isBitcoin ? "BTC: $" : "DOGE: $");
+                    lcd.print(currentPrice, isBitcoin ? 2 : 5);  // 2 decimals for Bitcoin, 5 for Dogecoin
+
+                    // Store the current price for comparison
+                    lastPrice = currentPrice;
+                } else {
+                    Serial.println("Failed to parse JSON");
+                    lcd.setCursor(0, 0);
+                    lcd.print("JSON Parse Error");
+                }
+            } else {
+                Serial.println("HTTP request failed with code: " + String(httpResponseCode));
+                lcd.setCursor(0, 0);
+                lcd.print("HTTP Error: ");
+                lcd.setCursor(0, 1);
+                lcd.print(httpResponseCode);
+            }
+            http.end();  // Close HTTP connection
+        }
+    }
+
+    // Update the second row message every 2.5 seconds
+    if (currentMillis - lastMessageSwitch >= messageDisplayInterval) {
+        lastMessageSwitch = currentMillis;
+
         lcd.setCursor(0, 1);
-        lcd.print(httpResponseCode);
-      }
+        lcd.print("                ");  // Clear the second row
+        lcd.setCursor(0, 1);
+        lcd.print(messages[messageIndex]);  // Display the current message
 
-      http.end();
+        messageIndex++;
+        if (messageIndex >= (sizeof(messages) / sizeof(messages[0]))) {
+            messageIndex = 0;  // Loop back to the first message
+        }
     }
-  }
-
-  // Update the second row message every 2.5 seconds
-  if (currentMillis - lastMessageSwitch >= messageDisplayInterval) {
-    lastMessageSwitch = currentMillis;
-
-    // Display the current message on the second row
-    lcd.setCursor(0, 1);
-    lcd.print("                ");  // Clear the second row
-    lcd.setCursor(0, 1);
-    lcd.print(messages[messageIndex]);
-
-    // Move to the next message
-    messageIndex++;
-    if (messageIndex >= (sizeof(messages) / sizeof(messages[0]))) {
-      messageIndex = 0;  // Loop back to the first message
-    }
-  }
 }
